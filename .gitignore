@@ -51,3 +51,5 @@ DocBuilder/source
 pocounit-results/
 
 tokenid.py
+.claude/settings.local.json
+stunner
