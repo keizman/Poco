@@ -149,6 +149,19 @@ Following example shows how to initialize poco instance for
     poco.device.wake()
     poco(text='Clock').click()
 
+* Android native APP (UIAutomator2 - Recommended)
+
+.. code-block:: python
+
+    # Requires: pip install uiautomator2
+    from poco.drivers.android.uiautomator2 import AndroidUiautomator2Poco
+
+    poco = AndroidUiautomator2Poco()  # Automatically connects to device
+    poco('Settings').click()
+
+    # The UIAutomator2 driver offers better performance and stability
+    # compared to the original UIAutomator implementation
+
 
 * for other engines, refer to `Poco drivers`_ for more details. If poco drivers does not support your engine, please
   refer to `Integration Guide`_.

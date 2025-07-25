@@ -3,3 +3,4 @@ requests
 airtest
 hrpc>=1.0.9
 websocket-client==0.48.0
+uiautomator2>=2.16.0  # For AndroidUiautomator2Poco driver (optional)
