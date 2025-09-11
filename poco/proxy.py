@@ -328,6 +328,34 @@ class UIObjectProxy(object):
             PocoNoSuchNodeException: raised when the UI element does not exist
         """
 
+        # Enhanced click logic: handle non-clickable elements by finding clickable parents
+        try:
+            # Check if current element is clickable
+            current_clickable = self.attr('clickable')
+            if current_clickable is False:
+                # Element is not clickable, try to find a clickable parent
+                print(f"Element {self.attr('resourceId') or self.attr('name') or 'unknown'} is not clickable, searching for clickable parent...")
+                
+                clickable_parent = self._find_clickable_parent()
+                if clickable_parent:
+                    print(f"Found clickable parent, using it for click action")
+                    # Use parent's position but keep original focus logic
+                    focus = focus or self._focus or 'center'
+                    pos_in_percentage = self.get_position(focus)  # Use original element's position
+                    self.poco.pre_action('click', self, pos_in_percentage)
+                    ret = self.poco.click(pos_in_percentage)
+                    if sleep_interval:
+                        time.sleep(sleep_interval)
+                    else:
+                        self.poco.wait_stable()
+                    self.poco.post_action('click', self, pos_in_percentage)
+                    return ret
+                else:
+                    print(f"No clickable parent found, proceeding with coordinate-based click")
+                    # Proceed with coordinate click anyway
+        except Exception as e:
+            print(f"Error checking clickability: {e}, proceeding with normal click")
+
         focus = focus or self._focus or 'center'
         pos_in_percentage = self.get_position(focus)
         self.poco.pre_action('click', self, pos_in_percentage)
@@ -771,7 +799,12 @@ class UIObjectProxy(object):
         """
 
         try:
-            return self.attr('visible')
+            # Consider element exists if it can be selected from hierarchy,
+            # regardless of its 'visible' attribute. This is important for
+            # ad close buttons which may be invisible-to-user but clickable.
+            nodes = self._do_query(multiple=False)
+            # _do_query returns [] or [node] with our UIAutomator2Hierarchy
+            return bool(nodes)
         except (PocoTargetRemovedException, PocoNoSuchNodeException):
             return False
 
@@ -859,6 +892,32 @@ class UIObjectProxy(object):
 
         return self._do_query()
 
+    def _find_clickable_parent(self):
+        """
+        Find a clickable parent element for non-clickable elements
+        
+        Returns:
+            UIObjectProxy: clickable parent if found, None otherwise
+        """
+        try:
+            current = self.parent()
+            max_depth = 5  # Limit search depth to avoid infinite loops
+            depth = 0
+            
+            while current and current.exists() and depth < max_depth:
+                try:
+                    if current.attr('clickable') is True:
+                        return current
+                    current = current.parent()
+                    depth += 1
+                except Exception:
+                    break
+            
+            return None
+        except Exception as e:
+            print(f"Error finding clickable parent: {e}")
+            return None
+
     def invalidate(self):
         """
         Clear the flag to indicate to re-query or re-select the UI element(s) from hierarchy.
@@ -881,11 +940,22 @@ class UIObjectProxy(object):
 
     def _do_query(self, multiple=True, refresh=False):
         if not self._evaluated or refresh:
-            self._nodes = self.poco.agent.hierarchy.select(self.query, multiple)
-            if not self._nodes or len(self._nodes) == 0:
-                # 找不到节点时，将当前节点状态重置，强制下一次访问时重新查询一次节点信息
+            raw = self.poco.agent.hierarchy.select(self.query, multiple)
+            if multiple:
+                self._nodes = raw
+                self._nodes_proxy_is_list = True
+            else:
+                if isinstance(raw, list):
+                    self._nodes = raw[0] if len(raw) > 0 else None
+                else:
+                    self._nodes = raw
+                self._nodes_proxy_is_list = False
+            if not self._nodes:
+                # 未找到节点时，清理状态并抛出异常
                 self.invalidate()
                 raise PocoNoSuchNodeException(self)
             self._evaluated = True
             self._query_multiple = multiple
         return self._nodes
+
+

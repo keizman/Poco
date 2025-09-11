@@ -1,14 +1,24 @@
 # coding=utf-8
 from __future__ import absolute_import
 
-from airtest.core.device import Device
-from airtest.core.api import connect_device, device as current_device
-from airtest.core.error import NoDeviceError
+import warnings
+
+try:
+    from airtest.core.device import Device
+    from airtest.core.api import connect_device, device as current_device
+    from airtest.core.error import NoDeviceError
+    AIRTEST_AVAILABLE = True
+except ImportError:
+    warnings.warn("Airtest not available. Device utilities will be limited.")
+    AIRTEST_AVAILABLE = False
+    Device = None
+    connect_device = current_device = NoDeviceError = None
 
 
-class VirtualDevice(Device):
+class VirtualDevice(object):
     def __init__(self, ip):
-        super(VirtualDevice, self).__init__()
+        if AIRTEST_AVAILABLE and Device:
+            super(VirtualDevice, self).__init__()
         self.ip = ip
 
     @property
@@ -28,6 +38,8 @@ def default_device():
 
     :return:
     """
+    if not AIRTEST_AVAILABLE:
+        return None
     try:
         return current_device()
     except NoDeviceError:

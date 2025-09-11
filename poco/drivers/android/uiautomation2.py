@@ -246,6 +246,34 @@ class UIAutomator2Node(AbstractNode):
             x2 / self.screen_width,
             y2 / self.screen_height
         ]
+    
+    def getAvailableAttributeNames(self):
+        """Return all available attribute names including Android-specific ones"""
+        # Get base attributes from parent class
+        base_attrs = list(super(UIAutomator2Node, self).getAvailableAttributeNames())
+        
+        # Add Android-specific attributes that are commonly used
+        android_attrs = [
+            'text',
+            'resourceId', 
+            'package',         # This was missing and causing package info loss!
+            'clickable',
+            'touchable',
+            'focusable',
+            'focused',
+            'scrollable',
+            'selected',
+            'checkable', 
+            'checked',
+            'longClickable',
+            'editable',
+            'dismissable',
+            'bounds',
+            'boundsInParent',
+            'enabled'  # Add enabled as it's also important
+        ]
+        
+        return base_attrs + android_attrs
 
 
 class UIAutomator2Dumper(AbstractDumper):
@@ -289,9 +317,18 @@ class UIAutomator2Dumper(AbstractDumper):
             self._root_node = UIAutomator2Node(dummy_xml, (1280, 720))
     
     def dumpHierarchy(self, onlyVisibleNode=True):
-        """Override to ensure we get fresh data each time"""
-        self._root_node = None  # Force refresh
-        return super(UIAutomator2Dumper, self).dumpHierarchy(onlyVisibleNode)
+        """Always dump full hierarchy (do NOT filter by visible).
+
+        Some OEMs/ad overlays mark close buttons as not visible-to-user while
+        they are still clickable. To ensure selectors like resourceId/text can
+        match those nodes, we bypass the visibility filtering here.
+        """
+        self._root_node = None  # Force refresh to get latest UI state
+        return super(UIAutomator2Dumper, self).dumpHierarchy(False)
+        
+    def invalidate_cache(self):
+        """Force refresh of hierarchy cache (useful for dynamic content like video players)"""
+        self._root_node = None
 
 
 class UIAutomator2Attributor(Attributor):
@@ -346,21 +383,35 @@ class UIAutomator2Input(InputInterface):
         super(UIAutomator2Input, self).__init__()
         self.device = device
         self.default_touch_down_duration = 0.01
+        self._cached_screen_info = None
+        
+    def _get_screen_info(self):
+        """Get screen info with caching for better performance"""
+        if self._cached_screen_info is None:
+            info = self.device.info
+            self._cached_screen_info = {
+                'width': info.get('displayWidth', 1280),
+                'height': info.get('displayHeight', 720)
+            }
+        return self._cached_screen_info
         
     def _get_actual_pos(self, x, y):
         """Convert normalized coordinates to actual screen coordinates"""
-        info = self.device.info
-        screen_width = info.get('displayWidth', 1280)
-        screen_height = info.get('displayHeight', 720)
+        screen_info = self._get_screen_info()
         
-        actual_x = int(x * screen_width)
-        actual_y = int(y * screen_height)
+        actual_x = int(x * screen_info['width'])
+        actual_y = int(y * screen_info['height'])
         return actual_x, actual_y
         
     def click(self, x, y):
-        """Click at normalized coordinates"""
+        """Click at normalized coordinates (compatible with Poco coordinate system)"""
         actual_x, actual_y = self._get_actual_pos(x, y)
         self.device.click(actual_x, actual_y)
+        
+    def right_click(self, x, y):
+        """Right click at normalized coordinates (for desktop compatibility)"""
+        # UIAutomator2 doesn't support right click, use long click as fallback
+        self.long_click(x, y, 0.5)
         
     def double_click(self, x, y):
         """Double click at normalized coordinates (for Airtest compatibility)"""
@@ -468,7 +519,7 @@ class UIAutomator2Screen(ScreenInterface):
             return None, None
             
     def getPortSize(self):
-        """Get screen size"""
+        """Get screen size (compatible with Poco interface)"""
         info = self.device.info
         return [info.get('displayWidth', 1280), info.get('displayHeight', 720)]
 
@@ -493,6 +544,152 @@ class UIAutomator2Hierarchy(HierarchyInterface):
     def setAttr(self, node, attrName, attrVal):
         """Set attribute on node"""
         return self.attributor.setAttr(node, attrName, attrVal)
+    
+    def select(self, query, multiple=False):
+        """
+        Select UI elements matching the given query expression
+        
+        Args:
+            query: Query expression tuple
+            multiple: Whether to select multiple elements
+            
+        Returns:
+              List of matching UIAutomator2Node objects (NEVER None!). For
+              single selection, returns a 1-length list or empty list.
+        """
+        try:
+            # Get the root node
+            root = self.dumper.getRoot()
+            if not root:
+                return []
+            
+            # Always collect a list first
+            all_matches = self._select_nodes(root, query, multiple=True)
+            if all_matches is None:
+                all_matches = []
+            
+            # Respect the `multiple` flag: return first node or full list
+            if multiple:
+                return all_matches
+            else:
+                return all_matches[:1]  # [] or [node]
+            
+        except Exception as e:
+            warnings.warn(f"Selection failed: {e}")
+            return []  # Always return empty list, never None
+    
+    def _select_nodes(self, root, query, multiple=False):
+        """Custom selector implementation for UIAutomator2"""
+        def evaluate_query_condition(node, condition_list):
+            """Evaluate a list of query conditions against a node"""
+            if not condition_list:
+                return True  # No conditions means match all
+                
+            for condition in condition_list:
+                if not isinstance(condition, tuple) or len(condition) != 3:
+                    continue
+                    
+                op, attr_name, expected_value = condition
+                actual_value = node.getAttr(attr_name)
+                
+                if op == 'attr=':
+                    if actual_value != expected_value:
+                        return False
+                elif op == 'attr.*=':
+                    # Regex/pattern matching - simplified as contains
+                    if expected_value not in str(actual_value):
+                        return False
+                        
+            return True
+        
+        def matches(node, q):
+            """Evaluate complex query tuple like ('and', ((op,(k,v)), ...)) or simple lists."""
+            # Simple list of conditions
+            if isinstance(q, list):
+                return evaluate_query_condition(node, q)
+            
+            # Tuple based query
+            if isinstance(q, tuple) and len(q) >= 2:
+                op = q[0]
+                operands = q[1]
+                # Handle logical AND of conditions built by build_query
+                if op == 'and' and isinstance(operands, (list, tuple)):
+                    conds = []
+                    for item in operands:
+                        if isinstance(item, tuple) and len(item) == 2 and isinstance(item[1], tuple):
+                            # item is like ('attr=', ('resourceId', 'xxx'))
+                            pred, kv = item
+                            conds.append((pred, kv[0], kv[1]))
+                    return evaluate_query_condition(node, conds)
+                
+                # Offspring/child/sibling/parent operators: fallback to evaluating right side conditions on this node
+                if op in ('>', '/', '-', '^'):
+                    try:
+                        # operands is a tuple (left_query, right_query)
+                        right = operands[1]
+                        return matches(node, right)
+                    except Exception:
+                        return True
+                
+                if op == 'index':
+                    return True
+                
+                # Unknown operator: treat as match-all to be safe
+                return True
+            
+            # Unknown format -> match
+            return True
+        
+        def search_tree(node, query, results):
+            """Recursively search the tree for matching nodes"""
+            should_include = False
+            
+            should_include = matches(node, query)
+                
+            if should_include:
+                results.append(node)
+                if not multiple:
+                    return True  # Stop after first match
+            
+            # Search children
+            for child in node.getChildren():
+                if search_tree(child, query, results):
+                    if not multiple:
+                        return True
+            
+            return False
+        
+        results = []
+        try:
+            search_tree(root, query, results)
+        except Exception as e:
+            warnings.warn(f"Tree search failed: {e}")
+            results = []
+        
+        # Always return a list, never None
+        return results if results is not None else []
+    
+    def _evaluate_simple_query(self, node, query):
+        """Evaluate a simple query (list of conditions) against a node"""
+        if isinstance(query, list):
+            for condition in query:
+                if not isinstance(condition, tuple) or len(condition) != 3:
+                    continue
+                    
+                op, attr_name, expected_value = condition
+                actual_value = node.getAttr(attr_name)
+                
+                if op == 'attr=':
+                    if actual_value != expected_value:
+                        return False
+                elif op == 'attr.*=':
+                    # Pattern matching - simplified as contains
+                    if expected_value not in str(actual_value):
+                        return False
+                        
+            return True
+        else:
+            return True
 
 
 class AndroidUiautomator2Agent(PocoAgent):
@@ -540,8 +737,12 @@ class AndroidUiautomator2Poco(Poco):
     offering better performance, stability, and compatibility with newer Android versions.
     
     Args:
+        device: Airtest device object (legacy compatibility, deprecated)
         device_id: Device serial number or IP address (None for default device)
+        using_proxy: Whether to use proxy connection (compatibility parameter, ignored)
+        force_restart: Whether to restart UIAutomator2 daemon on initialization
         use_airtest_input: Whether to use Airtest input system (requires airtest package)
+        screenshot_each_action: Whether to take screenshot before each action (requires airtest)
         **options: see :py:class:`poco.pocofw.Poco`
     
     Examples:
@@ -563,23 +764,59 @@ class AndroidUiautomator2Poco(Poco):
             
     """
     
-    def __init__(self, device_id=None, use_airtest_input=False, **options):
+    def __init__(self, device=None, device_id=None, using_proxy=True, force_restart=False, use_airtest_input=False, screenshot_each_action=False, **options):
+        # 兼容性参数存储
+        self.using_proxy = using_proxy
+        self.force_restart = force_restart
+        self.screenshot_each_action = screenshot_each_action
+        
+        # 处理device参数兼容性
+        # 如果传入了airtest device对象，提取device_id
+        if device is not None and hasattr(device, 'serialno'):
+            device_id = device.serialno
+            warnings.warn("Using airtest device object. Consider passing device_id directly for better performance.")
+        
         # Connect to device
         try:
             if device_id:
-                device = u2.connect(device_id)
+                uiautomator2_device = u2.connect(device_id)
             else:
-                device = u2.connect()
+                uiautomator2_device = u2.connect()
         except Exception as e:
             raise RuntimeError("Failed to connect to Android device: {}".format(str(e)))
         
-        self.device = device
+        self.device = uiautomator2_device
+        
+        # 处理force_restart: 对于UIAutomator2，我们可以重启uiautomator2服务
+        if force_restart:
+            try:
+                # 重启uiautomator2守护进程以确保干净状态
+                self.device.uiautomator.stop()
+                time.sleep(1)
+                self.device.uiautomator.start()
+                warnings.warn("force_restart: Restarted UIAutomator2 daemon")
+            except Exception as e:
+                warnings.warn("force_restart failed: {}".format(str(e)))
         
         # Initialize agent
-        agent = AndroidUiautomator2Agent(device, use_airtest_input)
+        agent = AndroidUiautomator2Agent(uiautomator2_device, use_airtest_input)
         
         # Initialize Poco
         super(AndroidUiautomator2Poco, self).__init__(agent, **options)
+        
+    def on_pre_action(self, action, ui, args):
+        """在每个操作前执行的钩子函数，用于screenshot_each_action功能"""
+        if self.screenshot_each_action:
+            try:
+                # 尝试使用Airtest的截图功能（如果可用）
+                from airtest.core.api import snapshot
+                msg = repr(ui)
+                if not isinstance(msg, six.text_type):
+                    msg = msg.decode('utf-8')
+                snapshot(msg='{}: {}'.format(action, msg))
+            except ImportError:
+                # 如果Airtest不可用，则跳过截图
+                warnings.warn("screenshot_each_action enabled but airtest not available")
         
     def get_device_info(self):
         """Get device information"""
@@ -607,6 +844,31 @@ class AndroidUiautomator2Poco(Poco):
     def get_current_app(self):
         """Get current running app info"""
         return self.device.app_current()
+        
+    def refresh_hierarchy(self):
+        """Force refresh of UI hierarchy (useful for dynamic content like video players)"""
+        if hasattr(self.agent.hierarchy, 'dumper') and hasattr(self.agent.hierarchy.dumper, 'invalidate_cache'):
+            self.agent.hierarchy.dumper.invalidate_cache()
+            
+    def get_normalized_coordinates(self, x, y):
+        """Convert pixel coordinates to normalized Poco coordinates (0.0-1.0)"""
+        screen_info = self.device.info
+        screen_width = screen_info.get('displayWidth', 1280)
+        screen_height = screen_info.get('displayHeight', 720)
+        
+        norm_x = float(x) / screen_width
+        norm_y = float(y) / screen_height
+        return [norm_x, norm_y]
+        
+    def get_pixel_coordinates(self, norm_x, norm_y):
+        """Convert normalized Poco coordinates to actual pixel coordinates"""
+        screen_info = self.device.info
+        screen_width = screen_info.get('displayWidth', 1280)
+        screen_height = screen_info.get('displayHeight', 720)
+        
+        pixel_x = int(norm_x * screen_width)
+        pixel_y = int(norm_y * screen_height)
+        return [pixel_x, pixel_y]
 
 
 class AndroidUiautomator2Helper(object):

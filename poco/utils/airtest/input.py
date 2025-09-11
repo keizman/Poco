@@ -1,10 +1,19 @@
 # coding=utf-8
 
 from functools import wraps
+import warnings
 
-from airtest.core.api import device as current_device
-from airtest.core.api import touch, swipe, double_click
-from airtest.core.helper import device_platform, logwrap
+try:
+    from airtest.core.api import device as current_device
+    from airtest.core.api import touch, swipe, double_click
+    from airtest.core.helper import device_platform, logwrap
+    AIRTEST_AVAILABLE = True
+except ImportError:
+    warnings.warn("Airtest not available. AirtestInput will not work.")
+    AIRTEST_AVAILABLE = False
+    current_device = None
+    touch = swipe = double_click = device_platform = logwrap = None
+
 from poco.sdk.interfaces.input import InputInterface
 
 __all__ = ['AirtestInput']
@@ -31,14 +40,25 @@ def serializable_adapter(func):
 
 
 @serializable_adapter
-@logwrap
-def record_ui(driver, action, ui, args):
+def record_ui_wrapper(driver, action, ui, args):
+    if AIRTEST_AVAILABLE and logwrap:
+        return logwrap(lambda d, a, u, ar: u)(driver, action, ui, args)
     return ui
+
+# Create the actual record_ui function
+if AIRTEST_AVAILABLE and logwrap:
+    @logwrap
+    def record_ui(driver, action, ui, args):
+        return ui
+else:
+    record_ui = record_ui_wrapper
 
 
 class AirtestInput(InputInterface):
     def __init__(self):
         super(AirtestInput, self).__init__()
+        if not AIRTEST_AVAILABLE:
+            raise ImportError("AirtestInput requires airtest package to be installed")
         self.default_touch_down_duration = 0.01
         self._driver = None
         self.use_render_resolution = False

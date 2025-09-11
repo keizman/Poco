@@ -1,13 +1,24 @@
 # coding=utf-8
 
 import base64
-from airtest.core.api import snapshot, device as current_device
+import warnings
+
+try:
+    from airtest.core.api import snapshot, device as current_device
+    AIRTEST_AVAILABLE = True
+except ImportError:
+    warnings.warn("Airtest not available. AirtestScreen will not work.")
+    AIRTEST_AVAILABLE = False
+    snapshot = current_device = None
+
 from poco.sdk.interfaces.screen import ScreenInterface
 
 
 class AirtestScreen(ScreenInterface):
     def __init__(self):
         super(AirtestScreen, self).__init__()
+        if not AIRTEST_AVAILABLE:
+            raise ImportError("AirtestScreen requires airtest package to be installed")
 
     def getPortSize(self):
         disp = current_device().display_info
