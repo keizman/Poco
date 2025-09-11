@@ -300,6 +300,69 @@ if element.exists():
 - 选择器修正与兜底：`only_test/lib/mcp_interface/device_inspector.py` 中 `_auto_handle_ads` → `try_close`
 - XML clickable 修正：`only_test/lib/pure_uiautomator2_extractor.py`（基于 `clickable/long-clickable/enabled/visible` 计算）
 
+### 新增案例：相同文本匹配多个元素，点击错位/点到第一个
+
+#### 现象
+- 使用 `poco(text="西语手机端720资源02").click()` 点击到第一个匹配项，但实际需要点击第二个（例如搜索结果列表中的第2项）。
+- 仅凭 text 会命中多个元素，导致点击错位或不稳定。
+
+#### 推荐解决方案（优先级从高到低）
+1) 组合约束 + 容器收敛（更稳健）
+```python
+base = poco(resourceId="com.mobile.brasiltvmobile:id/searchResultList")
+title_nodes = base.offspring(
+    resourceId="com.mobile.brasiltvmobile:id/mPosterName",
+    text="西语手机端720资源02",
+)
+target_title = title_nodes[1]  # 第二个
+
+# 直接点标题本身（可结合偏移点击）
+target_title.click_with_bias(dy_px=-5)
+
+# 或以标题为锚点，点击同卡片下的封面图（更贴合业务）
+card = target_title.parent()
+poster = card.offspring(resourceId="com.mobile.brasiltvmobile:id/posterImageView")[0]
+poster.click()
+```
+
+2) 明确索引（次优，易受排序/布局影响）
+```python
+poco(resourceId="com.mobile.brasiltvmobile:id/mPosterName", text="西语手机端720资源02")[1].click()
+
+# 细调点击位置（相对中心点偏移10px向上）
+poco(resourceId="com.mobile.brasiltvmobile:id/mPosterName", text="西语手机端720资源02")[1].click_with_bias(dy_px=-10)
+```
+
+3) 正则/模糊匹配（文本轻微变化时）
+```python
+poco(textMatches=r"^西语手机端720资源02\s*$", resourceId="com.mobile.brasiltvmobile:id/mPosterName").click()
+```
+
+#### 偏移/像素点击（便于与 Android 坐标对齐）
+- 相对中心偏移点击：
+```python
+poco(text="西语手机端720资源02").click_with_bias(dy_px=-10)  # 向上10px
+```
+- 绝对像素点击（全屏坐标，例如 x=285, y=940）：
+```python
+poco.click_px(285, 940)
+# 或对某个元素调用：
+poco(text="西语手机端720资源02").click_at_px(285, 940)
+```
+
+#### 调试日志（如何开启/关闭）
+为便于核对偏移/像素计算，我们在本地 Poco 包中增加了详细日志。默认已关闭，如需开启：
+
+- 文件：`Poco/poco/proxy.py`
+  - 方法：`UIObjectProxy.click_with_bias()` 内部的 `print("[Poco.click_with_bias] ...")`
+  - 取消注释该行可输出：屏幕分辨率、中心点(归一化/像素)、偏移(像素/归一化)、最终点击坐标(归一化/像素)
+
+- 文件：`Poco/poco/pocofw.py`
+  - 方法：`Poco.click_px()` 内部的 `print("[Poco.click_px] ...")`
+  - 取消注释该行可输出：屏幕分辨率、像素坐标与换算归一化坐标
+
+调试完成后，建议保持注释关闭，避免日志干扰控制台输出。
+
 ## 📝 总结
 
 通过这次迁移，我们实现了：

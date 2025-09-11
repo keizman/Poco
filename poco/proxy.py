@@ -208,6 +208,69 @@ class UIObjectProxy(object):
         obj.query = query
         return obj
 
+    def click_with_bias(self, dx_px=0, dy_px=0):
+        """Click this UI element with pixel bias relative to its center.
+
+        Usage examples:
+        - poco(text="西语手机端720资源02").click_with_bias(dy_px=-5)  # click 5px above center
+        - poco(resourceId="com.example:id/play").click_with_bias(dx_px=10)  # click 10px to the right of center
+
+        Args:
+            dx_px (int): horizontal pixel offset (positive=right, negative=left)
+            dy_px (int): vertical pixel offset (positive=down, negative=up)
+
+        Notes:
+            - Converts pixel bias to normalized coordinates using screen size from poco.get_screen_size() if available,
+              otherwise assumes 1080x1920 as fallback.
+            - Keeps the final click position within [0,1] range.
+        """
+        # get normalized center
+        x, y = self.get_position()
+        # get screen size
+        try:
+            if hasattr(self.poco, 'get_screen_size'):
+                w, h = self.poco.get_screen_size()
+            else:
+                w, h = 1080, 1920
+        except Exception:
+            w, h = 1080, 1920
+
+        try:
+            # compute normalized deltas
+            dx_norm = float(dx_px) / max(1.0, float(w))
+            dy_norm = float(dy_px) / max(1.0, float(h))
+            nx = x + dx_norm
+            ny = y + dy_norm
+            # clamp to [0,1]
+            nx_clamped = max(0.0, min(1.0, nx))
+            ny_clamped = max(0.0, min(1.0, ny))
+
+            # verbose debug info for verification
+            cx_px = x * float(w)
+            cy_px = y * float(h)
+            tx_px = nx_clamped * float(w)
+            ty_px = ny_clamped * float(h)
+            # 调试日志（默认注释，需调试时可取消注释）
+            # print(
+            #     "[Poco.click_with_bias] screen=(%s,%s) center_norm=(%.4f, %.4f) center_px=(%.1f, %.1f) bias_px=(%d,%d) bias_norm=(%.5f, %.5f) -> click_norm=(%.4f, %.4f) click_px=(%.1f, %.1f)"
+            #     % (w, h, x, y, cx_px, cy_px, dx_px, dy_px, dx_norm, dy_norm, nx_clamped, ny_clamped, tx_px, ty_px)
+            # )
+
+            return self.poco.click([nx_clamped, ny_clamped])
+        except Exception:
+            # fallback to normal click if any computation failed
+            return self.click()
+
+    def click_at_px(self, x_px, y_px):
+        """Click at absolute pixel position.
+
+        Usage:
+            - poco(text="...").click_at_px(285, 940)
+
+        Implementation: delegates to poco.click_px().
+        """
+        return self.poco.click_px(x_px, y_px)
+
     def __getitem__(self, item):
         """
         Select the specific UI element by index. If this UI proxy represents a set of UI elements, then use this method

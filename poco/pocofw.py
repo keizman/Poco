@@ -159,6 +159,32 @@ class Poco(PocoAccelerationMixin):
                 raise PocoTargetTimeout('all to appear', objects)
             self.sleep_for_polling_interval()
 
+    def click_px(self, x_px, y_px):
+        """Click at absolute pixel coordinates on screen.
+
+        Usage:
+            - poco.click_px(285, 940)
+
+        Notes:
+            - Converts pixel coordinates to normalized [0,1] using poco.get_screen_size().
+            - Clamps final normalized position to screen bounds.
+        """
+        try:
+            try:
+                w, h = self.get_screen_size()
+            except Exception:
+                w, h = 1080, 1920
+            x_px = float(x_px)
+            y_px = float(y_px)
+            nx = max(0.0, min(1.0, x_px / max(1.0, float(w))))
+            ny = max(0.0, min(1.0, y_px / max(1.0, float(h))))
+            # 调试日志（默认注释，需调试时可取消注释）
+            # print("[Poco.click_px] screen=(%s,%s) px=(%.1f, %.1f) -> norm=(%.4f, %.4f)" % (w, h, x_px, y_px, nx, ny))
+            return self.click([nx, ny])
+        except Exception:
+            # fallback: try raw normalized tuple if passed
+            return self.click([x_px, y_px])
+
     def freeze(this):
         """
         Snapshot current **hierarchy** and cache it into a new poco instance. This new poco instance is a copy from
