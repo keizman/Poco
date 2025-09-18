@@ -96,7 +96,11 @@ class UIAutomator2Node(AbstractNode):
             
         elif attrName == 'type':
             return attrib.get('class', 'Unknown')
-            
+
+        elif attrName == 'class_name':
+            # 修复: class_name 属性映射到 XML 的 'class' 属性
+            return attrib.get('class', '')
+
         elif attrName == 'visible':
             visible_to_user = attrib.get('visible-to-user', 'true')
             return visible_to_user.lower() == 'true'
@@ -122,7 +126,11 @@ class UIAutomator2Node(AbstractNode):
             
         elif attrName == 'package':
             return attrib.get('package', '')
-            
+
+        elif attrName == 'contentDesc':
+            # 修复: contentDesc 属性映射到 XML 的 'content-desc' 属性
+            return attrib.get('content-desc', '')
+
         elif attrName == 'clickable':
             clickable = attrib.get('clickable', 'false')
             return clickable.lower() == 'true'
@@ -255,22 +263,24 @@ class UIAutomator2Node(AbstractNode):
         # Add Android-specific attributes that are commonly used
         android_attrs = [
             'text',
-            'resourceId', 
-            'package',         # This was missing and causing package info loss!
+            'resourceId',
+            'package',
+            'contentDesc',     # 新增: content description 支持
+            'class_name',      # 新增: class name 支持
             'clickable',
             'touchable',
             'focusable',
             'focused',
             'scrollable',
             'selected',
-            'checkable', 
+            'checkable',
             'checked',
             'longClickable',
             'editable',
             'dismissable',
             'bounds',
             'boundsInParent',
-            'enabled'  # Add enabled as it's also important
+            'enabled'
         ]
         
         return base_attrs + android_attrs
